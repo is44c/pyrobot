@@ -1,63 +1,33 @@
 # Engine class; main controller
 
 import time
-import sys
+
 import pyro.gui.console as console
 import pyro.system as system
+import pyro.gui.drawable as drawable
 
-class Engine:
-   def __init__(self, robotfile = None, brainfile = None, simfile = None,
-                pyroargs=[], config = {}, worldfile = None, devices = ['']):
+class Engine(drawable.Drawable):
+   def __init__(self, robotfile = 0, brainfile = 0, simfile = 0):
+      drawable.Drawable.__init__(self,'engine')
       self.robot = 0
       self.brain = 0
-      self.gui = None
-      if brainfile != None:
-         self.brainfile = brainfile
-      else:
-         self.brainfile = ''
-      if robotfile != None:
-         self.robotfile = robotfile
-      else:
-         self.robotfile = ''
-      if worldfile != None:
-         self.worldfile = worldfile
-      else:
-         self.worldfile = ''
-      if simfile != None:
-         self.simfile = simfile
-      else:
-         self.simfile = ''
-      self.args = pyroargs
-      self.config = config
-      if self.simfile:
-         self.loadSimulator(self.simfile, self.worldfile)
-         time.sleep(2)
-      if self.robotfile:
-         self.loadRobot(self.robotfile)
-         if devices != ['']:
-            for dev in devices:
-               self.robot.startDevice(dev)
-      if self.brainfile:
-         self.loadBrain(self.brainfile)
-         time.sleep(2)
+      self.brainfile = ''
+      self.robotfile = ''
+      if simfile != 0:
+         self.loadSimulator(simfile)
+      if robotfile != 0:
+         self.loadRobot(robotfile)
+      if brainfile != 0:
+         self.loadBrain(brainfile)
 
    def reset(self):
       self.pleaseStop()
       time.sleep(.1) # give it time to stop
-      if self.brain is not 0:
+      if self.brain:
          self.brain.pleaseQuit()
          time.sleep(.1) # give it time to stop
          #self.robot = system.loadINIT(self.robotfile, redo = 1)
-         try:
-            self.brain.window.destroy()
-         except:
-            pass
-         try:
-            self.brain.destroy()
-            self.robot.destroy()
-         except:
-            print "I was unable to properly destroy the brain"
-         self.brain = system.loadINIT(self.brainfile, self, 1)
+         self.brain = system.loadINIT(self.brainfile, self.robot, 1)
 
    def resetFirstAttempts(self):
       self.pleaseStop()
@@ -79,35 +49,21 @@ class Engine:
          #reload(file)
          #reload(self.brainfile)
 
-   def loadSimulator(self, file, worldfile):
+   def loadSimulator(self,file):
+      console.log(console.INFO,'Loading ' + file)
       import os, string
       options = string.split(file)
-      guiflag = ''
-      simulatorName = file.split('/')[-1]
-      if system.file_exists(worldfile):
-         pass # leave it alone
-      elif system.file_exists( os.getenv('PYRO') + \
-                               '/plugins/worlds/%s/%s' % (simulatorName, worldfile)):
-         worldfile = os.getenv('PYRO') + \
-                     '/plugins/worlds/%s/%s' % (simulatorName, worldfile)
-      if self.config.get("pyro", "gui") .lower() == 'tty':
-         guiflag = '-g'
       if system.file_exists(options[0]):
-         os.system(file + " " + guiflag + " " + worldfile + " &")
+         os.system(file + " &")
       elif system.file_exists(os.getenv('PYRO') + \
                               '/plugins/simulators/' + options[0]):
-         os.system(os.getenv('PYRO') + '/plugins/simulators/' + file + \
-                   " " + guiflag + " " + worldfile + " &")
+         os.system(os.getenv('PYRO') + '/plugins/simulators/' + file + " &")
       else:
-         raise 'Simulator file not found: ' + file
-      print "Loading.",
-      sys.stdout.flush()
-      time.sleep(1)
-      print ".",
-      sys.stdout.flush()
+         raise 'Robot file not found: ' + file
 
    def loadRobot(self,file):
       import os
+      console.log(console.INFO,'Loading '+file)
       if file[-3:] != '.py':
          file = file + '.py'
       if system.file_exists(file):
@@ -120,59 +76,49 @@ class Engine:
          self.robotfile = os.getenv('PYRO') + '/plugins/robots/' + file
       else:
          raise 'Robot file not found: ' + file
-
-   def setRobot(self,robot):
-      self.robot = robot
-
-   def setBrain(self,brain):
-      self.brain = brain
+      self.append(self.robot)
 
    def loadBrain(self,file):
       if self.robot is 0:
          raise 'No robot loaded when loading brain'
       import os
+      console.log(console.INFO,'Loading '+file)
       if file[-3:] != '.py':
          file = file + '.py'
       if system.file_exists(file):
-         try:
-            self.brain.window.destroy()
-         except:
-            pass
-         try:
-            self.brain.destroy()
-            self.robot.destroy()
-         except:
-            pass
-         self.brain = system.loadINIT(file, self)
+         self.brain = system.loadINIT(file, self.robot)
          self.brainfile = file
       elif system.file_exists(os.getenv('PYRO') + \
                               '/plugins/brains/' + file): 
-         try:
-            self.brain.window.destroy()
-         except:
-            pass
-         try:
-            self.brain.destroy()
-            self.robot.destroy()
-         except:
-            pass
          self.brain = system.loadINIT(os.getenv('PYRO') + \
-                                      '/plugins/brains/' + file, self)
+                                      '/plugins/brains/' + file, self.robot)
          self.brainfile = os.getenv('PYRO') + '/plugins/brains/' + file
       else:
          raise 'File not found: ' + file
+      # FIX: currently, brain is not a drawable
+      #self.append(self.brain)
 
    def freeBrain(self):
+      #print "freeBrain!"
       if self.brain != 0:
+         #print "freeBrain running!"
          self.brain.pleaseQuit()
+         #time.sleep(1)
+         #self.brain = 0
+         #del self[self.index(self.brain)]
       
    def freeRobot(self):
       self.freeBrain()
+      #print "freeRobot!"
       if self.robot != 0:
+         #print "freeRobot running!"
          self.robot.disconnect()
+         #self.robot = 0
+         #del self[self.index(self.robot)]
 
    def shutdown(self):
       self.freeRobot()
+      print "shuting down..."
          
    def tryToConnect(self):
       if (self.robot is 0) or (self.brain is 0):
@@ -187,24 +133,15 @@ class Engine:
       if self.brain is not 0:
          self.brain.pleaseStep()
          time.sleep(.5) # arbitrary time to allow it to do something
-         self.robot.move(0, 0)
+         self.robot.act('move', 0, 0)
 
    def pleaseStop(self):
       if self.brain is not 0:
          self.brain.pleaseStop()
+         time.sleep(.5) # FIX: because there is no queue for commands
       if self.robot is not 0:
          self.robot.stop()
 
    def _draw(self,options,renderer):
 	pass # overload, if you want to draw it
       
-   def destroyBrain(self):
-      if self.brain is not 0:
-         try:
-            self.brain.destroy()
-            self.robot.destroy()
-         except:
-            print "I was unable to properly destroy the brain"
-
-   def getGUI(self):
-      return self.gui
