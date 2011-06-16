@@ -1,46 +1,52 @@
-from pyrobot.map import Map
 import Tkinter
-from math import cos, sin
 import pyrobot.gui.widgets.TKwidgets as TKwidgets
 import pyrobot.system as system
 import pyrobot.gui.console as console
-from pyrobot import pyrobotdir
+from pyrobot.map import Map
 
-class TkMap(Map, Tkinter.Tk):
+class TkMap(Map, Tkinter.Toplevel):
     """ Map with Tkinter GUI functions """
-    def __init__(self, cols, rows, value,
-                 width, height, widthMM, heightMM,
+    def __init__(self, cols, rows,
+                 frameWidth, frameHeight, widthMM, heightMM,
                  title, menu = None, keybindings = []):
         """ TkMap extends Map and Tkinter """
-        Map.__init__(self, cols, rows, widthMM, heightMM)
-        Tkinter.Tk.__init__(self)
-        self.title(title)
+        Map.__init__(self, cols=cols, rows=rows, 
+                     widthMM=widthMM, heightMM=heightMM)
+
+        import pyrobot.system.share as share
+        if not share.gui:
+          share.gui = Tkinter.Tk()
+          share.gui.withdraw()
+
+        Tkinter.Toplevel.__init__(self,share.gui)
+        self.wm_title(title)
         if menu == None:
             menu = [('File',[['Exit',self.destroy]])]
-        keybindings.append( ("<Configure>", self.changeSize))
         self.menuButtons = {}
         self.debug = 0
         self.application = 0
-        self.width = width
-        self.height = height
-        self.colScale = self.width / self.cols
-        self.rowScale = self.height / self.rows
+        self.frameWidth = frameWidth
+        self.frameHeight = frameHeight
+	self.reScale()
         self.addMenu(menu)
         self.frame = Tkinter.Frame(self,relief=Tkinter.RAISED,borderwidth=2)
         self.frame.pack(side = "top", expand = "yes", fill = "both")
-        self.canvas = Tkinter.Canvas(self.frame,width=self.width,height=self.height)
+        self.canvas = Tkinter.Canvas(self.frame,width=self.frameWidth,
+	                             height=self.frameHeight)
         self.canvas.pack(side = "top", expand = "yes", fill = "both")
         self.addKeyBindings(keybindings)
         self.protocol('WM_DELETE_WINDOW', self.destroy)
         self.update_idletasks()
         self.canvas.focus_set()
-        self.canvas_width_diff = int(self.winfo_width()) - int(self.canvas["width"])
-        self.canvas_height_diff = int(self.winfo_height()) - int(self.canvas["height"])
+        self.canvas_width_diff = int(self.winfo_width()) - \
+	                         int(self.canvas["width"])
+        self.canvas_height_diff = int(self.winfo_height()) - \
+	                          int(self.canvas["height"])
 
     def addText(self, x, y, label, **args):
         """ Millimeters """
         x_pos = (float(x)/self.colScaleMM) * self.colScale
-        y_pos = self.height - ((float(y)/self.rowScaleMM) * self.rowScale)
+        y_pos = self.frameHeight - ((float(y)/self.rowScaleMM) * self.rowScale)
         if "fill" not in args:
             args["fill"] = "black"
         self.canvas.create_oval(x_pos-1, y_pos-1, x_pos+1, y_pos+1, width=0, **args)
@@ -70,22 +76,23 @@ class TkMap(Map, Tkinter.Tk):
         menu['menu'] = menu.filemenu
         return menu
 
-    def changeSize(self, event = 0):
-        try:
-            self.width = int(self.winfo_width()) - self.canvas_width_diff
-            self.height = int(self.winfo_height()) - self.canvas_height_diff
-        except:
-            return
-        #print self.width, self.height
-        self.canvas.configure(width = self.width, height = self.height)
+    def reScale(self):
+        self.colScale = self.frameWidth / float(self.cols)
+        self.rowScale = self.frameHeight / float(self.rows)
+	# print "After rescale, now using: %f %f" % (self.colScale,self.rowScale)
+
+    def setSize(self, width, height):
+        self.frameWidth = width #+ self.canvas_width_diff
+        self.frameHeight = height #+ self.canvas_height_diff
+        #print self.frameWidth, self.frameHeight
+        self.canvas.configure(width = self.frameWidth, 
+	                      height = self.frameHeight)
         #print self.canvas["width"], self.canvas["height"]
-        self.colScale = self.width / self.cols
-        self.rowScale = self.height / self.rows
+        self.reScale()
         self.redraw()
 
     def setGrid(self, grid):
         Map.setGrid(self, grid)
-        self.changeSize()
 
     def destroy(self):
         self.withdraw()
@@ -99,15 +106,16 @@ class TkMap(Map, Tkinter.Tk):
 
     def fileloaddialog(self, filetype, skel, startdir = ''):
         from string import replace
+        import pyrobot
         from os import getcwd, getenv, chdir
         retval = ""
         cwd = getcwd()
         if startdir == '':
-            chdir(pyrobotdir() + "/plugins/" + filetype)
+            chdir(pyrobot.pyrobotdir() + "/plugins/" + filetype)
         else:
             chdir(startdir)
         d = TKwidgets.LoadFileDialog(self, "Load " + filetype, skel,
-                                     pyrobotdir() + "/plugins/" + filetype)
+                                     pyrobot.pyrobotdir() + "/plugins/" + filetype)
         if d.Show() == 1:
             doc = d.GetFileName()
             d.DialogCleanup()
@@ -128,9 +136,9 @@ class TkMap(Map, Tkinter.Tk):
             file = file + '.py'
         if system.file_exists(file):
             grid = system.loadINIT(file)
-        elif system.file_exists(pyrobotdir() + \
+        elif system.file_exists(os.getenv('PYROBOT') + \
                                 '/plugins/maps/' + file): 
-            grid = system.loadINIT(pyrobotdir() + \
+            grid = system.loadINIT(os.getenv('PYROBOT') + \
                                    '/plugins/plots/' + file)
         else:
             raise 'Map file not found: ' + file
@@ -151,15 +159,15 @@ class TkSimpleMap(TkMap):
 
 if __name__ == '__main__':
     print "Testing TkMap()..."
-    map = TkMap(8, 10, .5,
-                200, 500,
-                200, 500,
-                "Sample Map")
+    map = TkMap(cols=8,rows=10,
+                frameWidth=200, frameHeight=500,
+                widthMM=200, heightMM=500,
+                title="Sample Map")
     map.display()
     map.reset()
     map.display()
     print "Setting Grid location..."
-    map.setGridLocation(400, 900, 1.0, "A")
+    map.setGridLocation(col=50,row=100, value=1.0, label="A", absolute=0)
     map.validateGrid()
     print "Setting Grid to new size..."
     map.setGrid( [[0, 0, 0],

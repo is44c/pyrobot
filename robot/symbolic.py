@@ -426,6 +426,21 @@ class TCPRobot(Simbot):
 		self.lock.release()
 		return exp
 
+	def getVisibleMarkers(self):
+		exp = None
+		if self.socket == 0: return "not connected"
+		self.socket.sendto("getvisiblemarkers", self.addr)
+		try:
+			retval, addr = self.socket.recvfrom(self.BUFSIZE)
+		except:
+			retval = ""
+		retval = retval.strip()
+		try:
+			exp = pickle.loads( retval )
+		except:
+			exp = retval
+		return exp
+
 	def disconnect(self):
 		if self.connectionNum == 0: # the main one, let's close up!
 			# Close socket

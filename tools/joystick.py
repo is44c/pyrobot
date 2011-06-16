@@ -1,9 +1,14 @@
 import Tkinter
 
+
 class Joystick(Tkinter.Toplevel):
 
    def __init__(self, parent = None, hasZ = 0):
-      Tkinter.Toplevel.__init__(self, parent)
+      import pyrobot.system.share as share
+      if not share.gui:
+	 share.gui = Tkinter.Tk()
+	 share.gui.withdraw()
+      Tkinter.Toplevel.__init__(self, share.gui)
       self.debug = 0
       self.wm_title('Joystick')
       self.protocol('WM_DELETE_WINDOW',self.destroy)

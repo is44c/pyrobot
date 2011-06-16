@@ -5,6 +5,8 @@ A Pure Python 2D Robot Simulator
 (c) 2005, PyroRobotics.org. Licensed under the GNU GPL.
 """
 import time, math, random
+import map.mapUtils as mapUtils
+
 try:
     import Tkinter
 except:
@@ -821,6 +823,7 @@ class Simulator:
         self.display = {"wireframe": 0}
         self.running = 0
         self.stop = 0 # use to stop the sim
+	Simulator.resetMarkers(self)
     def resetPaths(self): pass
     def resetPath(self, pos): pass
     def update_idletasks(self): pass
@@ -1081,6 +1084,8 @@ class Simulator:
             retval = self.assoc[sockname[1]].a
         elif request == 'th':
             retval = self.assoc[sockname[1]].a / PIOVER180
+        elif request == 'getvisiblemarkers':
+	    retval = self.assoc[sockname[1]].getVisibleMarkers()
         elif len(request) > 1 and request[0] == '!': # eval
             try:
                 retval = str(eval(request[1:]))
@@ -1287,8 +1292,19 @@ class Simulator:
             return pickle.dumps(retval)
         else:
             return retval
+    def dumpMarkers(self):
+        print self.markers
+    def resetMarkers(self):
+        self.markers = {}
+        self.markerLoc = {}
+        self.markerAngle = {}
+    def addMarker(self,xM,yM,name,angle=0):
+        self.markers[name] = (xM,yM)
+        self.markerLoc[(xM,yM)] = name
+        self.markerAngle[name] = angle
 
 class TkSimulator(Tkinter.Toplevel, Simulator):
+
     def __init__(self, dimensions, offsets, scale, root = None, run = 1):
         if root == None:
             if share and share.gui:
@@ -1342,6 +1358,7 @@ class TkSimulator(Tkinter.Toplevel, Simulator):
             self.after(100, self.step)
         else:
             self.running = 0
+
     def toggleOption(self, key):
         if key == "lightAboveWalls":
             self.lightAboveWalls = not self.lightAboveWalls
@@ -1523,6 +1540,27 @@ class TkSimulator(Tkinter.Toplevel, Simulator):
             robot._last_pose = (-1, -1, -1)
         if not self.running:
             self.step(run=0)
+
+        # we now draw the markers
+        for (markerX,markerY) in self.markerLoc.keys():
+            markerName = self.markerLoc[(markerX,markerY)]
+  	    markerAngle = self.markerAngle[markerName]
+  
+  	    tipX = markerX+(.25*math.cos(markerAngle))
+  	    tipY = markerY+(.25*math.sin(markerAngle))
+  	    rightX = markerX+(.25*math.cos(markerAngle+(math.pi/2)))
+  	    rightY = markerY+(.25*math.sin(markerAngle+(math.pi/2)))
+  	    leftX = markerX+(.25*math.cos(markerAngle+(math.pi)))
+  	    leftY = markerY+(.25*math.sin(markerAngle+(math.pi)))
+  
+  	    self.canvas.create_polygon([(self.scale_x(tipX),self.scale_y(tipY)),
+				       (self.scale_x(leftX),self.scale_y(leftY)),
+				       (self.scale_x(rightX),self.scale_y(rightY))],
+				       tag="line", fill='green')
+  	    self.canvas.create_text(self.scale_x(markerX),
+				    self.scale_y(markerY), text=markerName,
+				    fill='red')
+        
     def printDetails(self):
         print "Window: size=(%d,%d), offset=(%d,%d), scale=%f" % (self.winfo_width(), self.winfo_height(), self.offset_x, self.offset_y, self.scale)
         for robot in self.robots:
@@ -1607,8 +1645,17 @@ class TkSimulator(Tkinter.Toplevel, Simulator):
                 self.drawLine(xya[0], xya[1], robot._gx, robot._gy, robot.color, "trail")
     def update(self):
         self.update_idletasks()
+    def resetMarkers(self):
+        Simulator.resetMarkers(self)
+	self.redraw()
+    def addMarker(self,xM,yM,name,angle=0):
+	Simulator.addMarker(self,xM,yM,name,angle)
+	self.redraw()
 
 class SimRobot:
+    CAMERA_FIELD_OF_VIEW = 40*(math.pi/180)
+    MARKER_VIEWABLE_ANGLE = 60*(math.pi/180)
+
     def __init__(self, name, x, y, a, boundingBox = [], color = "red"):
         if " " in name:
             name = name.replace(" ", "_")
@@ -2090,6 +2137,62 @@ class SimRobot:
         self.setPose(p_x, p_y, p_a)
         self.updateDevices()
         self.draw()
+
+    def getVisibleMarkers(self):
+        foundMarkers = []
+        # print "robot", self._gx, self._gy, self._ga
+
+        for (markerX,markerY) in self.simulator.markerLoc.keys():
+            markerName = self.simulator.markerLoc[(markerX,markerY)]
+	    markerAngle = self.simulator.markerAngle[markerName]
+            # print "marker", markerName, markerX, markerY, markerAngle
+
+	    distanceToMarker = mapUtils.calculateHypotenuse(self._gx-markerX,
+							      self._gy-markerY)
+
+            # get the angle to the marker, and its relation to the
+	    # orientation of the robot
+            angleToMarker = mapUtils.getAbsAngle(centerX=self._gx, centerY=self._gy, 
+						   headingX=markerX, headingY=markerY)
+
+	    cameraAngleDiff = mapUtils.normalizeAngle2(angleToMarker-self._ga+math.pi)
+
+	    # we do the same but this time from the perspective of the
+	    # marker 
+            angleFromMarker = mapUtils.getAbsAngle(centerX=markerX, centerY=markerY,
+						     headingX=self._gx, headingY=self._gy)
+
+	    markerViewDiff = mapUtils.normalizeAngle2(angleFromMarker-markerAngle+math.pi)
+
+	    # print angleToMarker,cameraAngleDiff,",",angleFromMarker,markerViewDiff
+
+	    # see if the marker is in the camera's field of view
+            # CAMERA_FIELD_OF_VIEW/2 = 0.35
+	    # and that the marker is at a viewable angle from the robot
+	    # MARKER_VIEWABLE_ANGLE/2 = 0.52
+	    if (cameraAngleDiff < self.CAMERA_FIELD_OF_VIEW/2 and
+		cameraAngleDiff > self.CAMERA_FIELD_OF_VIEW/2*-1 and
+		markerViewDiff < self.MARKER_VIEWABLE_ANGLE/2 and
+		markerViewDiff > self.MARKER_VIEWABLE_ANGLE/2*-1):
+
+    	       # see if that line is clear, i.e., doesn't intersect any walls
+    	       seg = Segment((self._gx, self._gy), (markerX, markerY))
+    	       clear = True
+    	       for w in self.simulator.world:
+    	           if (w.intersects(seg)):
+		      # print "in the way", w
+                      clear = False
+    	              break
+    
+               if (clear):
+	           # print "I can see ",markerName
+	           relXOffM = math.cos(cameraAngleDiff)*distanceToMarker
+	           relYOffM = math.sin(cameraAngleDiff)*distanceToMarker
+	           outputAngle = mapUtils.normalizeAngle2(self._ga-(markerAngle+math.pi))
+	           foundMarkers.append([relXOffM,relYOffM,
+				       outputAngle,markerName])
+
+        return foundMarkers
     def draw(self): pass
     def drawRay(self, dtype, x1, y1, x2, y2, color):
         if self.display[dtype] == 1:

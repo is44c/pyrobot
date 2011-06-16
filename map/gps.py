@@ -1,7 +1,20 @@
 from pyrobot.map.tkmap import TkMap
-from math import cos, sin, pi, sqrt, tanh
+from pyrobot.map.occupancyGrid import OccupancyGrid
+import math
+try:
+    import pyrobot.system.share as share
+except:
+    class share: debug = 0
+if not share.debug:
+    try:
+        import psyco; psyco.full()
+        print "GPS: psyco enabled"
+    except:
+        print "GPS: regular speed (no psyco)"
+else:
+    print "GPS: debug; regular speed"
 
-class GPS(TkMap):
+class GPS(OccupancyGrid):
    """
    GUI for visualizing the global perceptual space of a robot.
    """
@@ -12,123 +25,27 @@ class GPS(TkMap):
    ----------------------------------
      cols: number of columns in map
      rows: number of rows in map
-     value:
-     widthMM: actual distance represented by a column (in MMs)
-     heightMM: actual distance represented by a row (in MMs)
-     title: window title
+     value: default value for the cells
+     widthMM: total width which we want to represent in the map (in MMs)
+     heightMM: total height which we want to represent in the map (in MMs)
    """
-   def __init__(self, cols=400, rows=400, value = 0.5,
+   def __init__(self, cols=400, rows=400,
                 widthMM = 10000, heightMM = 10000,
-                title = "Global Perceptual Space"):
-      """ Pass in grid cols, grid cells, and total cols/rows in MM"""
-      self.step = 0
+		gridUpdate = ""):
       
-      self.changedValues = ()
-      
-      # 2000 is the max dist of a Pioneer sonar (in MMs) 
-      self.range = 5000
-
-      # sonar model is broken into 3 regions - these are the boundaries
-      self.reg2max = self.range * 0.3
-      self.reg1max = self.range * 0.75
-
-      self.field = 15
-
       # max probability of occupancy
       self.maxOccupied = 0.98
+      self.minOccupied = 0.001
 
-      # create the map
-      TkMap.__init__(self, cols, rows, value,
-                     cols, rows,
-                     widthMM, heightMM, title)
+      # Thresholds of certainty
+      self.occThreshold = 0.8
+      self.emptyThreshold = 0.2
+      
+      # create the occupancy grid
+      OccupancyGrid.__init__(self, cols=cols, rows=rows, 
+                             widthMM=widthMM, heightMM=heightMM, 
+			     gridResize=4, gridUpdate=gridUpdate)
 
-
-   """
-   -------------------------------------------------------------------------
-   probOccupied: compute the probability that a given location is occupied
-   -------------------------------------------------------------------------
-     dist: distance from robot to location
-     angle: angle from robot from zero heading of sensor
-   """
-   def probOccupied( self, dist, angle ):
-      # figure out what region we are in
-      if( dist <= self.reg2max ):
-         region = 2
-      elif( dist > self.reg2max and dist <= self.reg1max ):
-         region = 1
-      else:
-         region = 3
-
-      # set range and field based on previous knowledge and current readings
-      if( region == 1 ):
-         r = (self.range - dist)/self.range
-         f = (self.field - angle)/self.field 
-         #print "        r:", r, "    f", f
-         return( ((r+f) / 2) * self.maxOccupied )
-
-      elif( region == 2 ):
-         return( 1.0 - self.probEmpty( dist, angle ) )
-      elif( region == 3 ):
-         return( -1 )
-
-   """
-   -------------------------------------------------------------------------
-   probEmpty: compute the probability that a given location is NOT occupied
-   -------------------------------------------------------------------------
-     dist: distance from robot to location
-     angle: angle from robot from zero heading of sensor
-   """
-   def probEmpty( self, dist, angle ):
-      # figure out what region
-      if( dist <= self.reg2max ):
-         region = 2
-      elif( dist > self.reg2max and dist <= self.reg1max ):
-         region = 1
-      else:
-         region = 3
-
-      # calculate and return probability based on Bayes Rule
-      if( region == 1 ):
-         return( 1.0 - self.probOccupied( dist, angle ) )
-      elif( region == 2 ):
-         r = (self.range - dist)/self.range
-         f = (self.field - angle)/self.field 
-         #print "        r:", r, "    f", f
-         
-         return((r+f) / 2)
-      # nothing to be done in region 3 - since we didn't find anything
-      elif( region == 3 ):
-         return( -1 )
-
-   """
-   -------------------------------------------------------------------------
-   getProb: compute the probability that a given location is NOT occupied
-   -------------------------------------------------------------------------
-     dist: distance from robot to location
-     angle: angle from robot from zero heading of sensor
-     prevVal: get probability from previous iterations
-   """
-   def getProb( self, dist, angle, prevVal ):
-      # get region
-      if( dist <= self.reg2max ):
-         region = 2
-      elif( dist <= self.reg1max ):
-         region = 1
-      else:
-         region = 3
-
-      # inverse probability of old value
-      prevValInv = 1 - prevVal
-      # get new probabilities
-      probOcc = self.probOccupied( dist, angle )
-      probEmpty = self.probEmpty( dist, angle )
-
-      # Calculate Bayesian probability
-      if( probOcc == -1 or probEmpty == -1 ):
-         return( prevVal )
-      else:
-         return( (probOcc * prevVal) / ( (probOcc * prevVal) + (probEmpty * prevValInv) ) )
- 
    """
    -------------------------------------------------------------------------
    updateFromLPS: update values based on LPS
@@ -138,126 +55,135 @@ class GPS(TkMap):
    """
    def updateFromLPS(self, lps, robot):
 
-      # things we will need:
-      #grid, x, y, th, cellxMM, cellyMM:
-      #self.canvas.delete("old")
-      x = robot.x * 1000
-      y = robot.y * 1000
-      thr = robot.thr
-      # In GPS, the origin is at the bottom left corner.
-      # This matches the way world files are specified.
-      ypos = self.rows - int(y / self.rowScaleMM) - 1
-      xpos = int(x / self.colScaleMM)
+      # First we get the robot's current location in MM
+      robotXmm = robot.x * 1000
+      robotYmm = robot.y * 1000
+      robotThr = robot.thr
+#      print "Starting updateFromLPS, current pose: %f, %f, %f " % 
+#            (robot.x,robot.y,robot.thr)
 
-      ## draw out the sonar readings from the LPS
-      for i in range(lps.rows):
-         for j in range(lps.cols):
-            # y component is negative because y up is positive
-            xMM = (j - (lps.cols / 2)) * lps.colScaleMM
-            yMM = -1 * (i - (lps.rows / 2)) * lps.rowScaleMM
-            # cos(0) = 1, sin(0) = 0
-            xrot = (xMM * cos(thr) - yMM * sin(thr))
-            yrot = (xMM * sin(thr) + yMM * cos(thr))
+      # We want to give priority to hits contained in the LPS,  so we
+      # use the following to collect all the updates and apply the empty
+      # changes first and then the hit changes to the GPS.
 
-            # current location in question
-            xhit = x + xrot 
-            yhit = y + yrot 
+      emptyCells = []
+      hitCells = []
+     
+      # cycle through the grid of sonar readings in the LPS
+      for currentRow in range(lps.rows):
+         for currentCol in range(lps.cols):
 
-            # current cell in question
-            xcell = int(xhit / self.colScaleMM)
-            ycell = self.rows - int(yhit / self.rowScaleMM) - 1
+	    # if the lps doesn't have any info on this cell, skip
+	    # directly to the next cell 
+            if lps.getGridLocation(row=currentRow,col=currentCol,absolute=1) \
+	       == 0.5:
+              continue
 
-            # distance from robot to current location
-            dist = sqrt(xrot*xrot + yrot*yrot)
-            
-            # robot's position
-            oldx = int(xcell * self.colScale) + (self.rows/3)
-            oldy = int(ycell * self.rowScale) - (self.cols/3)
+	    # Due to resolution differences between the LPS and the GPS
+	    # the LPS info might really map onto MULTIPLE GPS cells
 
-            # current location value
-            oldVal = self.getGridLocation( oldx, oldy, 1 )
-            # _NoConvert( oldx, oldy )
+	    # shouldn't it be y which is negated??
+            sensorXStartmm = -1 * (currentRow - (lps.rows / 2)) * \
+	                      lps.rowScaleMM
+            sensorXEndmm = -1 * (currentRow + 1 - (lps.rows / 2)) * \
+	                      lps.rowScaleMM
+            sensorYStartmm = (currentCol - (lps.cols / 2)) * \
+	                     lps.colScaleMM
+            sensorYEndmm = (currentCol + 1 - (lps.cols / 2)) * \
+	                     lps.colScaleMM
 
-            # LPS grid only holds 3 values:
-            #  0:updated and nothing there
-            #  0.5:not updated - no idea what's here
-            #  1: updated and something was hit
+            # compensate for the robot's rotation
+            # remember cos(0) = 1, sin(0) = 0
+            colOffStartmm = (sensorXStartmm * math.cos(robotThr) - 
+			     sensorYStartmm * math.sin(robotThr))
+            colOffEndmm = (sensorXEndmm * math.cos(robotThr) - 
+			   sensorYEndmm * math.sin(robotThr))
+            rowOffStartmm = (sensorXStartmm * math.sin(robotThr) + 
+			     sensorYStartmm * math.cos(robotThr))
+            rowOffEndmm = (sensorXEndmm * math.sin(robotThr) + 
+			   sensorYEndmm * math.cos(robotThr))
 
-            # lps saw something here - update it's probability 
-            if lps.grid[i][j] == 1.0:
-               # occ = lps.grid[i][j]
-               occ = self.getProb( dist, 0, oldVal )
-               self.plotCell( xcell, ycell, occ ) #"black")
-               
-            # lps never updated - leave these locations along
-            elif lps.grid[i][j] == 0.5:
-               self.plotCell( xcell, ycell, oldVal ) #
-            # lps updated this, and found nothing - deteriorate value
-            else:
-               self.plotCell( xcell, ycell, oldVal * 0.1 )
+            # current GPS location in question
+            colHitStartmm = robotXmm + colOffStartmm
+            colHitEndmm = robotXmm + colOffEndmm
+            rowHitStartmm = robotYmm + rowOffStartmm
+            rowHitEndmm = robotYmm + rowOffEndmm
 
-      ## now draw out the path of the robot
-      ## if self.inRange(ypos, xpos):
-      ##    self.plotCell(xpos, ypos, 2.0 ) # "red")
+            # current range of GPS cells in question
+            gpsColCellStart = int(colHitStartmm / self.colScaleMM)
+            gpsColCellEnd = int(colHitEndmm / self.colScaleMM)
+	    if (gpsColCellEnd < gpsColCellStart):
+	      temp = gpsColCellStart
+	      gpsColCellStart = gpsColCellEnd
+	      gpsColCellEnd = temp
 
-      ## print "--------DONE WITH LPS---------"
- 
+            gpsRowCellStart = self.cols - int(rowHitStartmm / \
+	                                      self.rowScaleMM) - 1
+            gpsRowCellEnd = self.cols - int(rowHitEndmm / \
+					    self.rowScaleMM) - 1
+	    if (gpsRowCellEnd < gpsRowCellStart):
+	      temp = gpsRowCellStart
+	      gpsRowCellStart = gpsRowCellEnd
+	      gpsRowCellEnd = temp
+
+            # robot's position, assume it started in the center of the
+	    # grid
+            gpsColCenteredStart = int(gpsColCellStart+self.cols/2)
+            gpsColCenteredEnd = int(gpsColCellEnd+self.cols/2)
+            gpsRowCenteredStart = int(gpsRowCellStart-self.rows/2)
+            gpsRowCenteredEnd = int(gpsRowCellEnd-self.rows/2)
+
+            # the value in the lps
+            newInfo = lps.getGridLocation(row=currentRow,col=currentCol,
+                                          absolute=1)
+
+	    for nowRow in range(gpsRowCenteredStart,gpsRowCenteredEnd):
+	      for nowCol in range(gpsColCenteredStart,gpsColCenteredEnd):
+
+                # current location value
+                oldVal = self.getGridLocation(row=nowRow, 
+					      col=nowCol,
+					      absolute=1)
+                # we combine the two to calculate the new probability
+                occ = self.getProb(oldVal,newInfo)
+
+                if (occ > self.occThreshold):
+                  hitCells.append((nowRow, nowCol, occ))
+                else:
+                  emptyCells.append((nowRow, nowCol, occ))
+
+      # apply the changes to the grid BUT give preference to hit cells
+      for (rowCentered, colCentered, newVal) in emptyCells:
+        self.updateCell(rowCentered, colCentered, newVal)
+      for (rowCentered, colCentered, newVal) in hitCells:
+        self.updateCell(rowCentered, colCentered, newVal)
+
+#      self.display()
+#      print "--- One updateFromLPS done ---"
+
    """
    -------------------------------------------------------------------------
-   plotCell: sets a point up to be plotted - no longer actually plots a cell
-             this does, however, update the grid location with the new value
+   updateCell: update the grid location with the new value and mark that
+               location for redraw in the next redraw cycle
    -------------------------------------------------------------------------
-     xpos: x coordinate on map
-     ypos: y coordinate on map
-     value: new value for [x,y]
    """
-   def plotCell( self, xpos, ypos, value ):
-      # figure out which cell this represents
-      xCell = int(xpos * self.colScale) + (self.rows/3)
-      yCell = int(ypos * self.rowScale) - (self.cols/3)
-
+   def updateCell( self, row, col, value ):
       # get the current value
-      oldVal = self.getGridLocation( xCell, yCell, 1 ) # _NoConvert( xCell, yCell )
+      oldVal = self.getGridLocation(row=row,col=col, absolute=1 )
 
-      # no need to update if value isn't changing
+      # no need to really update if value isn't changing
       if( value != oldVal ):
-         # don't want to get too small in case something changes
-         if( value < 0.001 ):
-            value = 0.001
-         # don't want to get too large, in case something changes
-         elif( value > 0.98 ):
-            value = 0.98
+         # we want to keep in the range 0 - 1 but NOT too small or big
+	 # in case things change
+         if( value < self.minOccupied ):
+            value = self.minOccupied
+         elif( value > self.maxOccupied ):
+            value = self.maxOccupied 
 
-         # set the value
-         self.setGridLocation( xCell, yCell, value, None, 1 )
-         # _NoConvert( xCell, yCell, value, None )
+         # give the cell its new value
+         self.setGridLocation(row=row,col=col,value=value,absolute=1)
+	 self.addDirtyCells(row=row,col=col)
 
-         # update the changedValues tuple with this new coordinate set
-         self.changedValues = self.changedValues, (xCell, yCell)
-
-   """
-   -------------------------------------------------------------------------
-   redraw: redraws the graphical map
-   -------------------------------------------------------------------------
-   """
-   def redraw( self ):
-      # traverse through updated points - redraw those points on map
-      while( len( self.changedValues ) ):
-         self.changedValues, (row,col) = self.changedValues
-         val = self.getGridLocation( row, col, 1 ) # _NoConvert( row, col )
-
-##       # draws out robot path -- no longer used!!
-##          if( val == 2.0 ):
-##             color = "red"
-##             self.canvas.create_rectangle(row-1, col-1, row+1, col+1,
-##                                          width = 0,
-##                                          fill=color, tag = "old")
-##          else:
-         color = "gray%d" % ((1-val)*100)                           
-         self.canvas.create_rectangle(row, col, row+1, col+1,
-                                      width = 0,
-                                      fill=color, tag = "old")
-            
 if __name__ == '__main__':
     gps = GPS(50, 50)
     gps.application = 1
